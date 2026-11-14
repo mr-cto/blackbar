@@ -37,6 +37,32 @@ describe('pattern redaction, no model', () => {
     expect(r.text).toContain('09/11/2026');
   });
 
+  it('whole names are taken, never a fragment', () => {
+    const er = run('er').r;
+    expect(er.text).not.toMatch(/hitcombe|elgado|aria\b/);
+    expect(Object.values(er.vault)).toContain('Alan Whitcombe');
+    const eob = run('eob').r;
+    expect(Object.values(eob.vault)).toContain('Helen Marsh');
+    expect(Object.values(eob.vault)).toContain('James R. Okafor');
+    expect(eob.text).not.toMatch(/kafor|arsh\b/);
+    const t = 'Seen by Dr. J. Patel and Dr. Mary K. O’Neil today.';
+    const r = redact(t, patternSpans(t));
+    expect(r.text).toBe('Seen by Dr. [NAME_1] and Dr. [NAME_2] today.');
+  });
+
+  it('no mark starts or ends in the middle of a word, on any sample', () => {
+    for (const sample of SAMPLES) {
+      const r = redact(sample.text, patternSpans(sample.text));
+      for (const m of r.marks) {
+        const before = sample.text[m.start - 1] ?? ' ';
+        const after = sample.text[m.end] ?? ' ';
+        const cut = `${sample.id}: "${sample.text.slice(m.start - 3, m.end + 3)}"`;
+        expect(/[A-Za-z0-9]/.test(before), cut).toBe(false);
+        expect(/[A-Za-z0-9]/.test(after), cut).toBe(false);
+      }
+    }
+  });
+
   it('same value gets the same placeholder, and rehydrate restores it', () => {
     const { text, r } = run('er');
     const names = r.marks.filter((m) => text.slice(m.start, m.end) === 'Maria Delgado').map((m) => m.placeholder);

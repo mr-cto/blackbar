@@ -81,7 +81,7 @@ export function patternSpans(text: string, own: OwnDetails = { names: [], extras
   });
 
   // Clinicians: "Dr. Alan Whitcombe", "Helen Marsh, MD".
-  each(/\bDr\.?[ \t]+((?:[A-Z][A-Za-z'’-]+)(?:[ \t][A-Z]\.?)?(?:[ \t][A-Z][A-Za-z'’-]+)?)/g, text, (m) => {
+  each(/\bDr\.?[ \t]+((?:[A-Z]\.[ \t]?|[A-Z][A-Za-z'’-]+[ \t])?(?:[A-Z]\.[ \t])?[A-Z][A-Za-z'’-]+)/g, text, (m) => {
     const start = m.index + m[0].length - m[1].length;
     add(start, start + m[1].length, 'NAME');
   });
