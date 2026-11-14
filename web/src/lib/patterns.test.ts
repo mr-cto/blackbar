@@ -56,6 +56,14 @@ describe('pattern redaction, no model', () => {
     expect(q).not.toMatch(/Delgado|7741/);
   });
 
+  it('a span that wraps across lines is split per line and keeps the line break', () => {
+    const text = 'by Dr. X (Summit Emergency\nPhysicians Group) are';
+    const start = text.indexOf('Summit');
+    const r = redact(text, [{ start, end: text.indexOf(')'), kind: 'PROVIDER', source: 'model' }]);
+    expect(r.text).toBe('by Dr. X ([PROVIDER_1]\n[PROVIDER_2]) are');
+    expect(Object.values(r.vault)).toEqual(['Summit Emergency', 'Physicians Group']);
+  });
+
   it('does not black out money, codes or service dates', () => {
     const text = 'Patient Responsibility: $420.00\nCPT 99214 on 08/04/2026\nTotal Balance Due 1,894.00';
     expect(redact(text, patternSpans(text)).text).toBe(text);

@@ -1,0 +1,74 @@
+// Drives the hosted app through its no-on-device path in a real browser engine and saves screenshots.
+// Usage: node scripts/walkthrough.mjs <webkit|chromium> <width> <height> <outDir> [baseUrl]
+// Needs Playwright available to Node (NODE_PATH or a local install). Not part of the app.
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const pw = require(process.env.PLAYWRIGHT_PATH || 'playwright');
+const [engine = 'webkit', w = '390', h = '844', out = './shots', base = 'https://blackbar-dg.web.app'] = process.argv.slice(2);
+const browser = await pw[engine].launch();
+const video = process.env.RECORD_VIDEO ? { recordVideo: { dir: process.env.RECORD_VIDEO, size: { width: +w, height: +h } } } : {};
+const context = await browser.newContext({ viewport: { width: +w, height: +h }, deviceScaleFactor: process.env.RECORD_VIDEO ? 1 : 2, ...video });
+const page = await context.newPage();
+const pause = (ms) => (process.env.RECORD_VIDEO ? page.waitForTimeout(ms) : Promise.resolve());
+const errors = [];
+page.on('pageerror', (e) => errors.push(String(e)));
+page.on('response', (r) => { if (r.status() >= 400) errors.push(`${r.status()} ${r.url().split('?')[0]}`); });
+const shot = (name) => page.screenshot({ path: `${out}/${engine}-${w}-${name}.png` });
+const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+const report = {};
+
+await page.goto(`${base}/?device=off`, { waitUntil: 'networkidle' });
+report.pill = await page.textContent('[data-testid=device-pill]');
+report.overflowStart = await overflow();
+await shot('1-start');
+await pause(2500);
+await page.click('[data-testid=sample-er]');
+await page.waitForSelector('[data-testid=bill-device]');
+report.rules = await page.textContent('[data-testid=tally]');
+report.passState = await page.getAttribute('[data-testid=pass]', 'data-state');
+report.overflowRedact = await overflow();
+await shot('2-blackout');
+await pause(3000);
+// tap-to-redact: tap the word "EMERGENCY" in the device pane and expect one more mark
+const before = await page.locator('.mark').count();
+const box = await page.locator('[data-testid=bill-device] span[data-start]').first().boundingBox();
+if (box) await page.mouse.click(box.x + 30, box.y + 8);
+report.marksBeforeAfterTap = [before, await page.locator('.mark').count()];
+await page.click('[data-testid=read]');
+await page.waitForSelector('[data-testid=summary]', { timeout: 60000 });
+report.summary = (await page.textContent('[data-testid=summary]')).slice(0, 160);
+report.findings = await page.locator('.finding h3').allTextContents();
+report.overflowRead = await overflow();
+await shot('3-read');
+await pause(3000);
+await page.mouse.wheel(0, 500); await pause(2000);
+await page.fill('[data-testid=question]', 'What does CPT 99285 mean?');
+await page.keyboard.press('Enter');
+await page.waitForSelector('.qa-item .where', { timeout: 60000 });
+report.answerWhere = await page.textContent('.qa-item .where');
+report.answer = (await page.textContent('[data-testid=answer]')).slice(0, 160);
+await page.click('[data-testid=draft]');
+// the letter is done when the Copy button is enabled again
+await page.waitForFunction(() => { const b = [...document.querySelectorAll('.actionbar-btns button')].find((x) => x.textContent.includes('Copy letter')); return (b && !b.disabled) || document.querySelector('.error'); }, null, { timeout: 90000 }).catch(() => {});
+report.letterError = await page.locator('.error').textContent().catch(() => null);
+report.letterTail = (await page.innerText('[data-testid=letter]')).slice(-160);
+const mine = await page.innerText('[data-testid=letter]');
+report.letterHasName = mine.includes('Maria Delgado');
+report.letterHasAccount = mine.includes('7741-208-3391');
+report.overflowLetter = await overflow();
+await shot('4-letter-mine');
+await pause(3000);
+await page.click('[data-testid=view-cloud]');
+const cloud = await page.innerText('[data-testid=letter]');
+report.cloudLetterHasName = cloud.includes('Maria Delgado') || cloud.includes('7741-208-3391');
+await shot('5-letter-cloud');
+await pause(3000);
+await page.click('[data-testid=open-ledger]');
+await page.waitForSelector('.drawer');
+report.ledger = (await page.innerText('.ledger-totals')).replace(/\n/g, ' | ');
+await shot('6-ledger');
+await pause(3000);
+report.errors = errors;
+console.log(JSON.stringify(report, null, 1));
+await context.close();
+await browser.close();

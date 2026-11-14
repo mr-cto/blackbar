@@ -45,7 +45,7 @@ export interface Knobs {
   notice: string;
 }
 
-const DEFAULTS: Knobs = { cloudModel: 'gemini-3.5-flash-lite', chunkChars: 900, cloudSave: true, notice: '' };
+const DEFAULTS: Knobs = { cloudModel: 'gemini-3.5-flash-lite', chunkChars: 600, cloudSave: true, notice: '' };
 
 export async function loadKnobs(): Promise<Knobs> {
   try {

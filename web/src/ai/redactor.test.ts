@@ -17,6 +17,11 @@ describe('checks on what the on-device model returns', () => {
     for (const bad of ['EMERGENCY DEPARTMENT', 'ED VISIT LEVEL 5 HIGH COMPLEXITY', 'XR CHEST 2 VIEWS', 'Patient Financial Services']) {
       expect(acceptItem(bad, 'PROVIDER', er), bad).toBeNull();
     }
+    for (const bad of ['Patient Financial Services', 'STATEMENT DATE: 10/28/2026', 'DATE OF SERVICE: 09/19/2026', 'EMERGENCY DEPARTMENT', '09/19/2026', 'J1885']) {
+      expect(acceptItem(bad, 'OTHER_ID', er), bad).toBeNull();
+      expect(acceptItem(bad, 'EMPLOYER', er), bad).toBeNull();
+    }
+    expect(acceptItem('26-091187', 'OTHER_ID', SAMPLES[2].text)).toBe('OTHER');
     expect(acceptItem('99285', 'OTHER_ID', er)).toBeNull();
     expect(acceptItem('2,840.00', 'OTHER_ID', er)).toBeNull();
     expect(acceptItem('Buckeye Mutual PPO', 'PROVIDER', er)).toBeNull();

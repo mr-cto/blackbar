@@ -34,17 +34,18 @@ function build(params: HybridParams): GenerativeModel {
   return getGenerativeModel(ai, params);
 }
 
-export function redactorModel(systemPrompt: string, schema: JsonSchema) {
+export function redactorModel(systemPrompt: string, schema: JsonSchema, signal?: AbortSignal) {
   return build({
     mode: InferenceMode.ONLY_ON_DEVICE,
     onDeviceParams: {
       createOptions: { ...EN, initialPrompts: system(systemPrompt) },
-      promptOptions: { responseConstraint: schema },
+      // `signal` is a Prompt API option the SDK passes through to session.prompt().
+      promptOptions: { responseConstraint: schema, ...(signal ? { signal } : {}) } as { responseConstraint: object },
     },
   });
 }
 
-export function analystModel(cloudModel: string, systemPrompt: string, cloudSchema: ObjectSchema, deviceSchema: JsonSchema) {
+export function analystModel(cloudModel: string, systemPrompt: string, cloudSchema: ObjectSchema, deviceSystemPrompt: string, deviceSignal: AbortSignal) {
   return build({
     mode: InferenceMode.PREFER_IN_CLOUD,
     inCloudParams: {
@@ -52,9 +53,10 @@ export function analystModel(cloudModel: string, systemPrompt: string, cloudSche
       systemInstruction: systemPrompt,
       generationConfig: { responseMimeType: 'application/json', responseSchema: cloudSchema, temperature: 0.2 },
     },
+    // Reached only when the cloud call fails. `signal` is a Prompt API option the SDK passes through.
     onDeviceParams: {
-      createOptions: { ...EN, initialPrompts: system(systemPrompt) },
-      promptOptions: { responseConstraint: deviceSchema },
+      createOptions: { ...EN, initialPrompts: system(deviceSystemPrompt) },
+      promptOptions: { signal: deviceSignal } as unknown as { responseConstraint?: object },
     },
   });
 }
@@ -93,4 +95,20 @@ export async function deviceStatus(): Promise<DeviceStatus> {
   } catch {
     return 'unavailable';
   }
+}
+
+interface WarmSession { destroy(): void }
+let warm: Promise<WarmSession> | null = null;
+
+/**
+ * Loading the on-device model into memory is the slow part (a minute on older laptops), and Chrome
+ * unloads it when no session is open. Opening one idle session at page load moves that wait to
+ * before the user needs it and keeps the model resident for the Firebase AI Logic calls that follow.
+ * This only touches the browser's Prompt API; no prompt is sent and nothing leaves the device.
+ */
+export function warmDevice(): Promise<boolean> {
+  const lm = (globalThis as unknown as { LanguageModel?: LanguageModelGlobal & { create(options?: unknown): Promise<WarmSession> } }).LanguageModel;
+  if (!lm || deviceForcedOff) return Promise.resolve(false);
+  warm ??= lm.create(EN);
+  return warm.then(() => true, () => { warm = null; return false; });
 }

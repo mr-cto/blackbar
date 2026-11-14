@@ -69,6 +69,8 @@ main { width: 100%; max-width: 1240px; margin: 0 auto; padding: 28px var(--pad) 
 .pill i, .where i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .pill { border: 1px solid var(--rule); background: var(--sheet); color: var(--ink-2); }
 .pill-available { color: var(--device); border-color: color-mix(in srgb, var(--device) 35%, transparent); background: var(--device-bg); }
+.pill-loading i { animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.25; } }
 .pill-unavailable { color: var(--you); background: var(--you-bg); border-color: transparent; }
 .pill-shared { color: var(--cloud); background: var(--cloud-bg); border-color: transparent; margin-left: auto; }
 .where-on_device { color: var(--device); background: var(--device-bg); }
@@ -133,15 +135,15 @@ main { width: 100%; max-width: 1240px; margin: 0 auto; padding: 28px var(--pad) 
 .pane-cloud { background: #fff; }
 .bill { margin: 0; padding: 16px 14px 22px; font: 400 12px/1.75 var(--mono); white-space: pre; overflow-x: auto; cursor: text; tab-size: 4; }
 .pane-device .bill { cursor: pointer; }
-.mark { font: inherit; border: 0; padding: 1px 0; margin: 0; border-radius: 2px; color: inherit; box-shadow: 0 0 0 1.5px transparent; animation: pop 0.35s ease-out; }
+.mark { font: inherit; line-height: inherit; border: 0; padding: 0; margin: 0; border-radius: 2px; color: inherit; box-shadow: 0 0 0 1.5px transparent; animation: pop 0.35s ease-out; }
 .mark-pattern { background: var(--hl-pattern); } .mark-model { background: var(--hl-model); } .mark-you { background: var(--hl-you); }
 .mark:hover { box-shadow: 0 0 0 1.5px var(--ink); text-decoration: line-through; }
-.bar { display: inline-block; height: 1.3em; line-height: 1.3em; vertical-align: -0.28em; background: var(--bar); border-radius: 2px; color: #fff; padding: 0 0.5ch; animation: pop 0.35s ease-out; overflow: hidden; white-space: nowrap; box-sizing: border-box; }
+.bar { display: inline-block; height: 1.25em; line-height: 1.25em; vertical-align: -0.24em; margin: -0.2em 0; background: var(--bar); border-radius: 2px; color: #fff; padding: 0 0.5ch; animation: pop 0.35s ease-out; overflow: hidden; white-space: nowrap; box-sizing: border-box; }
 .bar span { font: 500 9px/1 var(--mono); letter-spacing: 0.08em; opacity: 0.62; vertical-align: 0.15em; }
 .bar.inline { padding: 0 6px; height: 1.2em; line-height: 1.2em; vertical-align: -0.2em; }
 @keyframes pop { from { transform: scaleX(0.6); opacity: 0; } to { transform: none; opacity: 1; } }
 
-.actionbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 15; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding: 12px var(--pad) calc(12px + env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--paper) 92%, transparent); backdrop-filter: blur(10px); border-top: 1px solid var(--rule); }
+.actionbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 15; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding: 12px var(--pad) calc(12px + env(safe-area-inset-bottom)); background: var(--paper); border-top: 1px solid var(--rule); box-shadow: 0 -12px 24px -18px rgba(20, 19, 15, 0.35); }
 .actionbar-note { font-size: 13px; color: var(--ink-2); max-width: 46em; overflow-wrap: anywhere; }
 .actionbar-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
 .actionbar > .primary { margin-left: auto; }
@@ -151,6 +153,8 @@ main { width: 100%; max-width: 1240px; margin: 0 auto; padding: 28px var(--pad) 
 .read h1 { font-size: clamp(28px, 4vw, 44px); }
 .amount { background: linear-gradient(transparent 60%, var(--hl-pattern) 60%); }
 .summary { font: 400 20px/1.5 var(--serif); color: var(--ink); margin: 6px 0 8px; max-width: 38em; }
+.summary.pre { white-space: pre-wrap; }
+.device-draft { padding-top: 24px; }
 .waiting { display: grid; gap: 8px; place-items: center; padding: 80px 0; text-align: center; }
 .section { margin-top: 34px; }
 .section-head { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding-bottom: 10px; border-bottom: 1px solid var(--ink); margin-bottom: 4px; }

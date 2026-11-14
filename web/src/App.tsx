@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { analyse, ask, LeakError, writeLetter, type Analysis } from './ai/analyst';
-import { deviceStatus, redactorModel, type DeviceStatus } from './ai/models';
+import { deviceStatus, redactorModel, warmDevice, type DeviceStatus } from './ai/models';
 import { modelSpans } from './ai/redactor';
 import { loadKnobs, type Knobs } from './firebase';
 import { loadCase, saveCase, type SharedCase } from './lib/cases';
@@ -17,7 +17,7 @@ type Pass =
   | { state: 'idle' }
   | { state: 'waking'; since: number }
   | { state: 'running'; done: number; total: number }
-  | { state: 'done'; ms: number; found: number }
+  | { state: 'done'; ms: number; found: number; skipped: number }
   | { state: 'none'; reason: string };
 
 interface QA { q: string; a: string; where?: 'on_device' | 'in_cloud'; busy: boolean }
@@ -49,6 +49,7 @@ function Workbench() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [analysisWhere, setAnalysisWhere] = useState<'on_device' | 'in_cloud'>('in_cloud');
   const [busy, setBusy] = useState<string | null>(null);
+  const [deviceDraft, setDeviceDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [qa, setQa] = useState<QA[]>([]);
   const [question, setQuestion] = useState('');
@@ -63,7 +64,13 @@ function Workbench() {
   const log = useCallback((e: LedgerEntry) => setLedger((l) => [...l, e]), []);
 
   useEffect(() => { loadKnobs().then(setKnobs); }, []);
-  useEffect(() => { deviceStatus().then(setDevice); }, []);
+  const [warmed, setWarmed] = useState(false);
+  useEffect(() => {
+    deviceStatus().then((d) => {
+      setDevice(d);
+      if (d === 'available') warmDevice().then(setWarmed);
+    });
+  }, []);
   useEffect(() => {
     const on = () => setOnline(true);
     const off = () => setOnline(false);
@@ -107,7 +114,7 @@ function Workbench() {
     }
     setPass({ state: 'waking', since: Date.now() });
     try {
-      const found = await modelSpans(text, knobs?.chunkChars ?? 900, (p) => {
+      const { spans: found, timedOut, pieces } = await modelSpans(text, knobs?.chunkChars ?? 600, (p) => {
         if (ac.signal.aborted) return;
         setModelFound(p.spans);
         setPass({ state: 'running', done: p.done, total: p.total });
@@ -115,8 +122,12 @@ function Workbench() {
       if (ac.signal.aborted) return;
       const elapsed = performance.now() - t0;
       setModelFound(found);
-      setPass({ state: 'done', ms: elapsed, found: found.length });
-      log(newEntry({ step: 'Black out: on-device model', mode: 'ONLY_ON_DEVICE', where: 'on_device', ms: elapsed, sentChars: 0, sent: '', note: 'The raw bill was read by the model inside this browser.' }));
+      if (timedOut === pieces) {
+        setPass({ state: 'none', reason: 'The on-device model was too slow to answer on this device right now, so the rules did the first pass. Check the bill and tap anything they missed. Nothing was sent.' });
+        return;
+      }
+      setPass({ state: 'done', ms: elapsed, found: found.length, skipped: timedOut });
+      log(newEntry({ step: 'Black out: on-device model', mode: 'ONLY_ON_DEVICE', where: 'on_device', ms: elapsed, sentChars: 0, sent: '', note: `The raw bill was read by the model inside this browser.${timedOut ? ` ${timedOut} of ${pieces} pieces timed out and were left to the rules.` : ''}` }));
     } catch (e) {
       if (ac.signal.aborted) return;
       setPass({ state: 'none', reason: `The on-device model could not run (${e instanceof Error ? e.message : 'unknown error'}). The rules did the first pass; check the bill and tap anything they missed.` });
@@ -135,18 +146,19 @@ function Workbench() {
 
   const fail = (e: unknown) => {
     if (e instanceof LeakError) setError(`${e.message} Nothing was sent. Go back and black them out: ${e.leaks.slice(0, 3).join(', ')}`);
+    else if (e instanceof DOMException && e.name === 'TimeoutError') setError('The cloud could not be reached and the on-device model was too slow to answer on this device. Nothing was sent. Try again when you are back online.');
     else setError(e instanceof Error ? e.message : 'Something went wrong.');
   };
 
   /** Step 3: the redacted bill goes to the cloud model (or the device if the cloud is unreachable). */
   const read = async () => {
     abortRef.current?.abort();
-    setError(null); setAnalysis(null); setQa([]); setLetter(''); setShareUrl(null);
+    setError(null); setAnalysis(null); setQa([]); setLetter(''); setShareUrl(null); setDeviceDraft('');
     setBusy(online ? 'Reading the redacted bill' : 'No connection, so the on-device model is reading the redacted bill. This is slower');
     setStage('read');
     window.scrollTo({ top: 0 });
     try {
-      const { analysis: a, entry } = await analyse(redacted.text, redacted.vault, knobs?.cloudModel ?? 'gemini-3.5-flash-lite');
+      const { analysis: a, entry } = await analyse(redacted.text, redacted.vault, knobs?.cloudModel ?? 'gemini-3.5-flash-lite', setDeviceDraft);
       setAnalysis(a); setAnalysisWhere(entry.where === 'on_device' ? 'on_device' : 'in_cloud'); log(entry);
     } catch (e) { fail(e); } finally { setBusy(null); }
   };
@@ -218,7 +230,7 @@ function Workbench() {
           ))}
         </nav>
         <div className="top-right">
-          <DevicePill device={device} online={online} />
+          <DevicePill device={device} online={online} warmed={warmed} />
           <button className="ghost ledger-btn" onClick={() => setLedgerOpen(true)} data-testid="open-ledger">
             What left this device{ledger.length ? ` (${ledger.filter((e) => e.where === 'in_cloud').length})` : ''}
           </button>
@@ -314,17 +326,23 @@ function Workbench() {
 
       {stage === 'read' && (
         <main className="read">
-          {busy && !analysis && <div className="waiting"><Spinner label={`${busy}…`} /><p className="muted">Only the blacked-out version is being read.</p></div>}
+          {busy && !analysis && !deviceDraft && <div className="waiting"><Spinner label={`${busy}…`} /><p className="muted">Only the blacked-out version is being read.</p></div>}
+          {busy && !analysis && deviceDraft && (
+            <div className="device-draft" data-testid="device-draft">
+              <p className="pass"><WhereBadge where="on_device" /><span>The cloud could not be reached, so the on-device model is reading the redacted bill.</span></p>
+              <p className="summary">{show(deviceDraft)}</p>
+            </div>
+          )}
           {analysis && (
             <>
               <div className="read-head">
                 <div>
                   <p className="eyebrow">{analysis.documentType}</p>
-                  <h1>{analysis.youOwe && analysis.youOwe !== 'not stated' ? <>You are being asked for <span className="amount">{analysis.youOwe}</span></> : 'Here is what this says'}</h1>
+                  <h1>{analysisWhere === 'on_device' ? 'A short read, from this device' : analysis.youOwe && analysis.youOwe !== 'not stated' ? <>You are being asked for <span className="amount">{/^[0-9]/.test(analysis.youOwe) ? '$' + analysis.youOwe : analysis.youOwe}</span></> : 'Here is what this says'}</h1>
                 </div>
                 <WhereBadge where={analysisWhere} />
               </div>
-              <p className="summary" data-testid="summary">{show(analysis.summary)}</p>
+              <p className={`summary${analysisWhere === 'on_device' ? ' pre' : ''}`} data-testid="summary">{show(analysis.summary)}</p>
 
               {analysis.findings.length > 0 && (
                 <Section title="Worth raising" aside={<span className="count">{analysis.findings.length}</span>}>
@@ -340,7 +358,11 @@ function Workbench() {
                 </Section>
               )}
 
-              <Section title="Line by line">
+              {analysisWhere === 'on_device' && (
+                <p className="pass" data-testid="short-read"><WhereBadge where="on_device" /><span>The cloud could not be reached, so the on-device model gave this shorter read. Reconnect and read again for the line-by-line view and the letter.</span></p>
+              )}
+
+              {analysis.lines.length > 0 && <Section title="Line by line">
                 <div className="lines" role="table">
                   {analysis.lines.map((l, i) => (
                     <div key={i} className={`line v-${l.verdict}`} role="row">
@@ -351,7 +373,7 @@ function Workbench() {
                     </div>
                   ))}
                 </div>
-              </Section>
+              </Section>}
 
               <Section title="Ask about this bill" aside={<span className="muted small">Answered on this device when it can be</span>}>
                 <div className="qa">
@@ -376,7 +398,7 @@ function Workbench() {
 
               <footer className="actionbar">
                 <span className="actionbar-note">The letter is written around placeholders. Your details are added on this device.</span>
-                <button className="primary" onClick={draft} disabled={!online} data-testid="draft">{online ? 'Draft my dispute letter' : 'Letter needs a connection'}</button>
+                <button className="primary" onClick={analysisWhere === 'on_device' ? read : draft} disabled={!online && analysisWhere !== 'on_device'} data-testid="draft">{analysisWhere === 'on_device' ? 'Try the cloud again' : online ? 'Draft my dispute letter' : 'Letter needs a connection'}</button>
               </footer>
             </>
           )}
@@ -416,16 +438,16 @@ function Workbench() {
   );
 }
 
-function DevicePill({ device, online }: { device: DeviceStatus; online: boolean }) {
+function DevicePill({ device, online, warmed }: { device: DeviceStatus; online: boolean; warmed: boolean }) {
   const text = {
     checking: 'Checking this device',
-    available: 'On-device model ready',
+    available: warmed ? 'On-device model ready' : 'On-device model loading',
     downloadable: 'On-device model not downloaded',
     downloading: 'On-device model downloading',
     unavailable: 'No on-device model here',
   }[device];
   return (
-    <span className={`pill pill-${device}`} data-testid="device-pill" title={device === 'unavailable' ? 'Rules and your own review do the blacking out. Nothing is sent to find your details.' : undefined}>
+    <span className={`pill pill-${device}${device === 'available' && !warmed ? ' pill-loading' : ''}`} data-testid="device-pill" data-warm={warmed} title={device === 'unavailable' ? 'Rules and your own review do the blacking out. Nothing is sent to find your details.' : undefined}>
       <i aria-hidden="true" />{text}{!online && ' · offline'}
     </span>
   );
@@ -441,9 +463,9 @@ function PassStatus({ pass }: { pass: Pass }) {
   if (pass.state === 'idle') return null;
   return (
     <div className={`pass pass-${pass.state}`} data-testid="pass" data-state={pass.state}>
-      {pass.state === 'waking' && <><Spinner label="Rules are done. Waking the on-device model" /><span className="muted">{Math.round((Date.now() - pass.since) / 1000)} s · the first run loads the model into memory</span></>}
+      {pass.state === 'waking' && <><Spinner label="Rules are done. The on-device model is reading the first piece" /><span className="muted">{Math.round((Date.now() - pass.since) / 1000)} s · the first run also loads the model into memory</span></>}
       {pass.state === 'running' && <><Spinner label={`On-device model is reading piece ${Math.min(pass.done + 1, pass.total)} of ${pass.total}`} /><div className="meter"><i style={{ width: `${(pass.done / pass.total) * 100}%` }} /></div></>}
-      {pass.state === 'done' && <><WhereBadge where="on_device" /><span>The on-device model read the whole bill in {ms(pass.ms)}. Nothing was sent.</span></>}
+      {pass.state === 'done' && <><WhereBadge where="on_device" /><span>{pass.skipped ? `The on-device model read most of the bill in ${ms(pass.ms)}; ${pass.skipped} slow piece${pass.skipped > 1 ? 's were' : ' was'} left to the rules.` : `The on-device model read the whole bill in ${ms(pass.ms)}.`} Nothing was sent.</span></>}
       {pass.state === 'none' && <><WhereBadge where="rules" /><span>{pass.reason}</span></>}
     </div>
   );

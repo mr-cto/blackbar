@@ -43,6 +43,22 @@ export function normalizeSpans(spans: Span[], textLength: number): Span[] {
   return out;
 }
 
+/** A span that wraps across lines becomes one span per line, so bars never swallow a line break. */
+function splitAtLineBreaks(text: string, s: Span): Span[] {
+  const out: Span[] = [];
+  let start = s.start;
+  for (let i = s.start; i <= s.end; i++) {
+    if (i === s.end || text[i] === '\n') {
+      const piece = text.slice(start, i);
+      const lead = piece.length - piece.trimStart().length;
+      const trimmed = piece.trim();
+      if (trimmed) out.push({ ...s, start: start + lead, end: start + lead + trimmed.length });
+      start = i + 1;
+    }
+  }
+  return out;
+}
+
 export type Vault = Record<string, string>;
 
 export interface Redacted {
@@ -58,7 +74,7 @@ const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
 
 /** Replace every span with a stable placeholder such as [NAME_1]. */
 export function redact(text: string, spans: Span[]): Redacted {
-  const clean = normalizeSpans(spans, text.length);
+  const clean = normalizeSpans(spans, text.length).flatMap((s) => splitAtLineBreaks(text, s));
   const vault: Vault = {};
   const seen = new Map<string, string>();
   const counters: Partial<Record<Kind, number>> = {};

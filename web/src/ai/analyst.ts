@@ -19,6 +19,17 @@ export interface Analysis {
   questions: string[];
 }
 
+/** The free tier is rate limited and occasionally busy: try a cloud call once more before giving up. */
+async function withRetry<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (e) {
+    if (!/429|503|quota|high demand|overloaded|unavailable/i.test(e instanceof Error ? e.message : '')) throw e;
+    await new Promise((r) => setTimeout(r, 2500));
+    return call();
+  }
+}
+
 export class LeakError extends Error {
   constructor(public leaks: string[]) {
     super(`Blocked: ${leaks.length} personal detail(s) were still in the text.`);
@@ -67,31 +78,38 @@ const cloudSchema = Schema.object({
   },
 });
 
-// The same shape as JSON Schema, for the on-device fallback when the cloud cannot be reached.
-const str = { type: 'string' };
-const deviceSchema = {
-  type: 'object',
-  properties: {
-    summary: str, documentType: str, youOwe: str,
-    lines: { type: 'array', items: { type: 'object', properties: { code: str, label: str, plain: str, amount: str, verdict: { type: 'string', enum: ['looks_normal', 'worth_asking', 'likely_error'] }, note: str }, required: ['code', 'label', 'plain', 'amount', 'verdict', 'note'] } },
-    findings: { type: 'array', items: { type: 'object', properties: { title: str, severity: { type: 'string', enum: ['high', 'medium', 'low'] }, detail: str, ask: str }, required: ['title', 'severity', 'detail', 'ask'] } },
-    questions: { type: 'array', items: str },
-  },
-  required: ['summary', 'documentType', 'youOwe', 'lines', 'findings', 'questions'],
-};
+// When the cloud cannot be reached, the same redacted text goes to the on-device model. A small
+// model on a laptop CPU is slow and unreliable at large JSON, so it is asked for a short plain-text
+// read instead, streamed so the reader sees it arrive.
+const DEVICE_ANALYST_SYSTEM = `You help a patient understand a US medical bill. The bill is redacted: tokens like [NAME_1] stand for details you cannot see; leave them as they are.
+Answer in plain text, under 110 words, no markdown: one sentence on what the document is and the amount asked, then up to three numbered things worth questioning (for example a line that appears twice, an out-of-network note, a denial, a fee with no service). Information only, not advice.`;
 
-export async function analyse(redacted: string, vault: Vault, cloudModel: string): Promise<{ analysis: Analysis; entry: LedgerEntry }> {
+const DEVICE_READ_TIMEOUT_MS = 240_000;
+
+export async function analyse(
+  redacted: string, vault: Vault, cloudModel: string, onDeviceText: (soFar: string) => void,
+): Promise<{ analysis: Analysis; entry: LedgerEntry }> {
   const prompt = `Here is the redacted document.\n\n${redacted}`;
   guard(prompt, vault);
   const t0 = performance.now();
-  const model = analystModel(cloudModel, ANALYST_SYSTEM, cloudSchema, deviceSchema);
-  const result = await model.generateContent(userTurn(prompt));
-  const where = whereOf(result.response.inferenceSource);
-  const parsed = JSON.parse(result.response.text()) as Partial<Analysis>;
-  const analysis: Analysis = {
-    summary: parsed.summary ?? '', documentType: parsed.documentType ?? 'document', youOwe: parsed.youOwe ?? 'not stated',
-    lines: parsed.lines ?? [], findings: parsed.findings ?? [], questions: parsed.questions ?? [],
-  };
+  const model = analystModel(cloudModel, ANALYST_SYSTEM, cloudSchema, DEVICE_ANALYST_SYSTEM, AbortSignal.timeout(DEVICE_READ_TIMEOUT_MS));
+  const result = await withRetry(() => model.generateContentStream(userTurn(prompt)));
+  let text = '';
+  for await (const chunk of result.stream) {
+    text += chunk.text();
+    if (!text.trimStart().startsWith('{')) onDeviceText(text); // JSON is the cloud; prose is the device
+  }
+  const where = whereOf((await result.response).inferenceSource);
+  let analysis: Analysis;
+  if (where === 'in_cloud') {
+    const parsed = JSON.parse(text) as Partial<Analysis>;
+    analysis = {
+      summary: parsed.summary ?? '', documentType: parsed.documentType ?? 'document', youOwe: parsed.youOwe ?? 'not stated',
+      lines: parsed.lines ?? [], findings: parsed.findings ?? [], questions: parsed.questions ?? [],
+    };
+  } else {
+    analysis = { summary: text.trim(), documentType: 'Short read', youOwe: 'not stated', lines: [], findings: [], questions: [] };
+  }
   return {
     analysis,
     entry: newEntry({
@@ -113,7 +131,7 @@ export async function writeLetter(
   guard(prompt, vault);
   const t0 = performance.now();
   const model = writerModel(cloudModel, WRITER_SYSTEM);
-  const result = await model.generateContentStream(userTurn(prompt));
+  const result = await withRetry(() => model.generateContentStream(userTurn(prompt)));
   let letter = '';
   for await (const chunk of result.stream) {
     letter += chunk.text();

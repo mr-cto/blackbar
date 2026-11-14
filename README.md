@@ -27,7 +27,7 @@ set in one file: [`web/src/ai/models.ts`](web/src/ai/models.ts).
 |---|---|---|---|
 | 1. Black out | Rules mark everything with a shape (IDs, dates of birth, phones, addresses, labelled names). The on-device model then reads the raw bill in small pieces and names what rules cannot: clinicians, clinics, employers. | `ONLY_ON_DEVICE` | Rules plus your own review. There is no cloud fallback for raw text, by construction. |
 | 2. You approve | Side by side: the bill on your device, and the bill as the cloud will see it. Tap a word to black it out, tap a mark to restore it. | none | |
-| 3. Read | The redacted bill is explained line by line, with likely errors and what to ask. Structured output. | `PREFER_IN_CLOUD` | Offline, the on-device model gives a shorter read of the same redacted text. |
+| 3. Read | The redacted bill is explained line by line, with likely errors and what to ask. Structured output, streamed. | `PREFER_IN_CLOUD` | If the cloud cannot be reached, the on-device model streams a short plain-text read of the same redacted text. |
 | 4. Ask | Short follow-up questions, streamed. | `PREFER_ON_DEVICE` | No local model: the redacted question goes to the cloud. |
 | 5. Letter | A dispute letter written around placeholders like `[NAME_1]`, streamed. | `ONLY_IN_CLOUD` | Needs a connection. |
 | 6. Fill in | Placeholders are swapped for your real details. | no model | Always local. |
@@ -54,11 +54,15 @@ Three deterministic guards sit around the models:
 
 ## Platforms
 
-| Platform | On-device model | Status |
+| Where | On-device model | Status |
 |---|---|---|
-| Web (Chrome desktop 139+) | Gemini Nano through the Prompt API | Built and tested. |
-| Any other browser | none | Works: rules and manual review for redaction, cloud for the rest. |
-| iOS | Apple Foundation Models | See [`ios/`](ios/) and its README for what is and is not verified. |
+| Chrome desktop 139+ | Gemini Nano through the Prompt API | Built and tested end to end. |
+| Any other browser, phones included | none | Works: rules and your review do the redaction, the cloud does the rest. Tested in WebKit at phone width. |
+
+Native iOS (Apple Foundation Models) and Android (Gemini Nano) clients are not part of this repository.
+The same four-mode design maps onto the Firebase AI Logic hybrid APIs for those platforms.
+
+Add `?device=off` to the URL to see the no-on-device behaviour in Chrome.
 
 ## Run it
 
@@ -82,8 +86,10 @@ npm run build    # type-check and production build to web/dist
 
 Deploy rules and hosting with the Firebase CLI: `firebase deploy --only firestore:rules,hosting`.
 
-To try the on-device path, open the app in Chrome and check the pill in the header. The first run loads
-the model into memory, which can take a minute or more on older hardware.
+To try the on-device path, open the app in Chrome and watch the pill in the header. The model is loaded
+into memory when the page opens ("On-device model loading", then "ready"), which can take a minute on
+older hardware. `scripts/walkthrough.mjs` drives the hosted app through the no-on-device path with
+Playwright and saves screenshots.
 
 ## Project layout
 
@@ -96,7 +102,7 @@ web/src/lib/redaction.ts  spans, placeholders, vault, rehydrate, leak gate
 web/src/lib/cases.ts      shareable redacted cases in Firestore
 web/src/App.tsx           the four screens
 firestore.rules           capability-link rules for redacted cases
-ios/                      SwiftUI client using Apple Foundation Models through Firebase AI Logic
+scripts/walkthrough.mjs   Playwright walkthrough of the hosted app
 ```
 
 ## Limits, stated plainly
@@ -105,7 +111,8 @@ ios/                      SwiftUI client using Apple Foundation Models through F
   and why the leak gate only knows about values that were found. Read the right-hand pane before you send.
 - Dates of service, procedure codes, amounts and the insurer's name are kept on purpose; the analysis needs
   them. Taken together they are far less identifying than a name and member ID, but they are not nothing.
-- The on-device model has a small context window, so the bill is read in pieces.
+- The on-device model has a small context window, so the bill is read in pieces. A piece that takes too
+  long is dropped and left to the rules; the interface says so.
 - Blackbar gives information, not medical, legal or financial advice.
 - All sample bills in this repository are invented. Any resemblance to a real person or provider is
   coincidental.
