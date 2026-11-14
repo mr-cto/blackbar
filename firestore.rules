@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // A case holds redacted material only. Its id is a 128-bit secret that acts as the key:
+    // anyone with the link can read it, nobody can list, change or delete.
+    match /cases/{caseId} {
+      allow get: if caseId.matches('^[0-9a-f]{32}$');
+      allow list, update, delete: if false;
+      allow create: if caseId.matches('^[0-9a-f]{32}$')
+        && request.resource.data.keys().hasOnly(['v', 'redacted', 'analysis', 'letter', 'createdAt'])
+        && request.resource.data.v == 1
+        && request.resource.data.redacted is string && request.resource.data.redacted.size() < 20000
+        && request.resource.data.analysis is string && request.resource.data.analysis.size() < 40000
+        && request.resource.data.letter is string && request.resource.data.letter.size() < 20000
+        && request.resource.data.createdAt == request.time;
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

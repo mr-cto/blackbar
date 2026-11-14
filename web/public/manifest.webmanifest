@@ -1,0 +1,4 @@
+{ "name": "Blackbar", "short_name": "Blackbar", "start_url": "/", "display": "standalone",
+  "background_color": "#f3efe6", "theme_color": "#f3efe6",
+  "description": "Private medical bill help. Identity stays on your device.",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }] }
